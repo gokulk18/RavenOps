@@ -1,0 +1,59 @@
+global:
+  environment: production
+  domain: ravenops.local
+
+mongodb:
+  enabled: true
+  auth:
+    rootUsername: ravenops
+    rootPassword: ravenops_pass
+    database: ravenops
+
+redis:
+  enabled: true
+  auth:
+    password: ravenops_redis
+
+rabbitmq:
+  enabled: true
+  auth:
+    username: ravenops
+    password: ravenops_pass
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+
+replicaCounts:
+  gateway: 2
+  auth: 2
+  github: 2
+  workflow: 2
+  log: 2
+  parser: 3
+  ai: 2
+  analytics: 2
+  notification: 1
+  frontend: 2
+
+image:
+  repository: ravenops
+  tag: latest
+  pullPolicy: IfNotPresent
+
+jwt:
+  secret: super-secret-jwt-key-change-in-production-min-32-chars
+  algorithm: HS256
+
+github:
+  webhookSecret: ravenops-webhook-secret-local
+  appId: ""
+  clientSecret: ""
+
+azure:
+  storageConnectionString: ""
+  openaiEndpoint: ""
+  openaiApiKey: ""

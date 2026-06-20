@@ -1,0 +1,347 @@
+version: '3.9'
+
+networks:
+  ravenops-net:
+    driver: bridge
+
+volumes:
+  mongodb-data:
+  redis-data:
+  rabbitmq-data:
+  azurite-data:
+
+services:
+  # ─── Infrastructure ────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: ravenops-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ravenops
+      MONGO_INITDB_ROOT_PASSWORD: ravenops_pass
+      MONGO_INITDB_DATABASE: ravenops
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb-data:/data/db
+      - ./infrastructure/docker/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: ravenops-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ravenops_redis --appendonly yes
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'ravenops_redis', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ravenops-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ravenops
+      RABBITMQ_DEFAULT_PASS: ravenops_pass
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: ravenops-azurite
+    restart: unless-stopped
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --loose
+    ports:
+      - '10000:10000'
+      - '10001:10001'
+      - '10002:10002'
+    volumes:
+      - azurite-data:/data
+    networks:
+      - ravenops-net
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: ravenops-mailhog
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+    networks:
+      - ravenops-net
+
+  openai-mock:
+    build:
+      context: ./services/openai-mock
+      dockerfile: Dockerfile
+    container_name: ravenops-openai-mock
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ─── Backend Services ──────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: ravenops-auth-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8001:8001'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8001/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: ravenops-api-gateway
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8000:8000'
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  github-service:
+    build:
+      context: ./services/github-service
+      dockerfile: Dockerfile
+    container_name: ravenops-github-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8002:8002'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8002/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  workflow-service:
+    build:
+      context: ./services/workflow-service
+      dockerfile: Dockerfile
+    container_name: ravenops-workflow-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8003:8003'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8003/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  log-service:
+    build:
+      context: ./services/log-service
+      dockerfile: Dockerfile
+    container_name: ravenops-log-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8004:8004'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8004/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  parser-service:
+    build:
+      context: ./services/parser-service
+      dockerfile: Dockerfile
+    container_name: ravenops-parser-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8005:8005'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8005/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  ai-service:
+    build:
+      context: ./services/ai-service
+      dockerfile: Dockerfile
+    container_name: ravenops-ai-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8006:8006'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      openai-mock:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8006/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: ravenops-analytics-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8007:8007'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8007/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: ravenops-notification-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8008:8008'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ravenops-net
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8008/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ─── Frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ravenops-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    ports:
+      - '3000:3000'
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    networks:
+      - ravenops-net

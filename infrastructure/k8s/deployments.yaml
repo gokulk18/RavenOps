@@ -1,0 +1,663 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ravenops-config
+  namespace: ravenops
+data:
+  MONGODB_DB_NAME: "ravenops"
+  SERVICE_BUS_PROVIDER: "rabbitmq"
+  AZURE_BLOB_CONTAINER: "ravenops-logs"
+  AZURE_OPENAI_DEPLOYMENT: "gpt-4o"
+  AZURE_OPENAI_API_VERSION: "2024-02-01"
+  JWT_ALGORITHM: "HS256"
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  JWT_REFRESH_TOKEN_EXPIRE_DAYS: "30"
+  ENVIRONMENT: "production"
+  DEBUG: "false"
+  LOG_LEVEL: "INFO"
+  AUTH_SERVICE_URL: "http://auth-service:8001"
+  GITHUB_SERVICE_URL: "http://github-service:8002"
+  WORKFLOW_SERVICE_URL: "http://workflow-service:8003"
+  LOG_SERVICE_URL: "http://log-service:8004"
+  PARSER_SERVICE_URL: "http://parser-service:8005"
+  AI_SERVICE_URL: "http://ai-service:8006"
+  ANALYTICS_SERVICE_URL: "http://analytics-service:8007"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8008"
+  SMTP_HOST: "mailhog"
+  SMTP_PORT: "1025"
+  SMTP_FROM: "noreply@ravenops.local"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ravenops-secrets
+  namespace: ravenops
+type: Opaque
+data:
+  # Base64 encoded values for production secrets (these are placeholders to be filled by GitOps/Vault)
+  MONGODB_URI: bW9uZ29kYjovL3JhdmVub3BzOnJhdmVub3BzX3Bhc3NAbW9uZ29kYjoyNzAxNy9yYXZlbm9wcz9hdXRoU291cmNlPWFkbWlu # mongodb://ravenops:ravenops_pass@mongodb:27017/ravenops?authSource=admin
+  REDIS_URL: cmVkaXM6Ly86cmF2ZW5vcHNfcmVkaXNAcmVkaXM6NjM3OS8w # redis://:ravenops_redis@redis:6379/0
+  RABBITMQ_URL: YW1xcDovL3JhdmVub3BzOnJhdmVub3BzX3Bhc3NAcmFiYml0bXE6NTY3Mi8= # amqp://ravenops:ravenops_pass@rabbitmq:5672/
+  AZURE_STORAGE_CONNECTION_STRING: RGVmYXVsdEVuZHBvaW50c1Byb3RvY29sPWh0dHA7QWNjb3VudE5hbWU9ZGV2c3RvcmVhY2NvdW50MTtBY2NvdW50S2V5PUVieTh2ZE0weE5PY3FGbHFVd0pQTGxtRXRsQ0RYSjFPR0xIcm5OMm9sN20yOUpCRkdSMTFlMHVRaThDQ0NEPT07QmxvYkVuZHBvaW50PWh0dHA6Ly9henVyaXRlOjEwMDAwL2RldnN0b3JlYWNjb3VudDE7 # devstore default
+  AZURE_OPENAI_ENDPOINT: aHR0cDovL29wZW5haS1tb2NrOjgwODA= # http://openai-mock:8080
+  AZURE_OPENAI_API_KEY: bW9jay1rZXk= # mock-key
+  JWT_SECRET: c3VwZXItc2VjcmV0LWp3dC1rZXktY2hhbmdlLWluLXByb2R1Y3Rpb24tbWluLTMyLWNoYXJz # super-secret...
+  GITHUB_WEBHOOK_SECRET: cmF2ZW5vcHMtd2ViaG9vay1zZWNyZXQtbG9jYWw= # ravenops-webhook-secret-local
+
+---
+# ─── API GATEWAY ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: ravenops
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: ravenops/api-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: ravenops
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - protocol: TCP
+    port: 8000
+    targetPort: 8000
+
+---
+# ─── AUTH SERVICE ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: ravenops
+  labels:
+    app: auth-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+      - name: auth-service
+        image: ravenops/auth-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8001
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: ravenops
+spec:
+  selector:
+    app: auth-service
+  ports:
+  - protocol: TCP
+    port: 8001
+    targetPort: 8001
+
+---
+# ─── GITHUB SERVICE ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-service
+  namespace: ravenops
+  labels:
+    app: github-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: github-service
+  template:
+    metadata:
+      labels:
+        app: github-service
+    spec:
+      containers:
+      - name: github-service
+        image: ravenops/github-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8002
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-service
+  namespace: ravenops
+spec:
+  selector:
+    app: github-service
+  ports:
+  - protocol: TCP
+    port: 8002
+    targetPort: 8002
+
+---
+# ─── WORKFLOW SERVICE ─────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflow-service
+  namespace: ravenops
+  labels:
+    app: workflow-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workflow-service
+  template:
+    metadata:
+      labels:
+        app: workflow-service
+    spec:
+      containers:
+      - name: workflow-service
+        image: ravenops/workflow-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8003
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 400m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8003
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflow-service
+  namespace: ravenops
+spec:
+  selector:
+    app: workflow-service
+  ports:
+  - protocol: TCP
+    port: 8003
+    targetPort: 8003
+
+---
+# ─── LOG SERVICE ──────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-service
+  namespace: ravenops
+  labels:
+    app: log-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: log-service
+  template:
+    metadata:
+      labels:
+        app: log-service
+    spec:
+      containers:
+      - name: log-service
+        image: ravenops/log-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8004
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8004
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-service
+  namespace: ravenops
+spec:
+  selector:
+    app: log-service
+  ports:
+  - protocol: TCP
+    port: 8004
+    targetPort: 8004
+
+---
+# ─── PARSER SERVICE ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parser-service
+  namespace: ravenops
+  labels:
+    app: parser-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: parser-service
+  template:
+    metadata:
+      labels:
+        app: parser-service
+    spec:
+      containers:
+      - name: parser-service
+        image: ravenops/parser-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8005
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 200m
+            memory: 128Mi
+          limits:
+            cpu: 800m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8005
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: parser-service
+  namespace: ravenops
+spec:
+  selector:
+    app: parser-service
+  ports:
+  - protocol: TCP
+    port: 8005
+    targetPort: 8005
+
+---
+# ─── AI SERVICE ───────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-service
+  namespace: ravenops
+  labels:
+    app: ai-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-service
+  template:
+    metadata:
+      labels:
+        app: ai-service
+    spec:
+      containers:
+      - name: ai-service
+        image: ravenops/ai-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8006
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8006
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-service
+  namespace: ravenops
+spec:
+  selector:
+    app: ai-service
+  ports:
+  - protocol: TCP
+    port: 8006
+    targetPort: 8006
+
+---
+# ─── ANALYTICS SERVICE ────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: ravenops
+  labels:
+    app: analytics-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: analytics-service
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      containers:
+      - name: analytics-service
+        image: ravenops/analytics-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8007
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 400m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8007
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-service
+  namespace: ravenops
+spec:
+  selector:
+    app: analytics-service
+  ports:
+  - protocol: TCP
+    port: 8007
+    targetPort: 8007
+
+---
+# ─── NOTIFICATION SERVICE ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: ravenops
+  labels:
+    app: notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+      - name: notification-service
+        image: ravenops/notification-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8008
+        envFrom:
+        - configMapRef:
+            name: ravenops-config
+        - secretRef:
+            name: ravenops-secrets
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8008
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: ravenops
+spec:
+  selector:
+    app: notification-service
+  ports:
+  - protocol: TCP
+    port: 8008
+    targetPort: 8008
+
+---
+# ─── FRONTEND NEXT.JS APP ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ravenops
+  labels:
+    app: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: ravenops/frontend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "http://api-gateway:8000"
+        - name: NEXT_PUBLIC_WS_URL
+          value: "ws://api-gateway:8000"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: ravenops
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 3000
+
+---
+# ─── INGRESS CONTROLLER MAPPING ───────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ravenops-ingress
+  namespace: ravenops
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /api/
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 8000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              number: 3000
