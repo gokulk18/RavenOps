@@ -193,7 +193,7 @@ async def verify_endpoints(jwt_token: str, repo_id: str, run_id: str):
         # Poll for completion
         print("  Polling for analysis completion...")
         analysis_completed = False
-        for attempt in range(10):
+        for attempt in range(30):
             await asyncio.sleep(2)
             r_run = await client.get(f"{GATEWAY_URL}/runs/{run_id}", headers=headers)
             run_data = r_run.json()
